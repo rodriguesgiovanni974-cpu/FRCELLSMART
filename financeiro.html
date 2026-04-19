@@ -933,6 +933,10 @@ function goTo(sec, btn) {
     ? `<svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Nova Conta`
     : `<svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Novo Lançamento`;
   btnAdd.onclick = isContas ? openConta : openModal;
+  // sincroniza mobile nav
+  document.querySelectorAll('.mn-item').forEach(b => b.classList.remove('active'));
+  const mnBtn = document.getElementById('mn-' + sec);
+  if (mnBtn) mnBtn.classList.add('active');
   render();
 }
 
@@ -1592,24 +1596,13 @@ init();
 
 <script>
 function goToMobile(sec, btn) {
-  // reutiliza goTo passando o nav-item correspondente da sidebar (para não duplicar lógica)
   const sidebarBtn = document.querySelector(`.nav-item[onclick*="'${sec}'"]`);
   if (sidebarBtn) goTo(sec, sidebarBtn);
   document.querySelectorAll('.mn-item').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  // sincroniza badge vencidas no mobile
   const bv = document.getElementById('badge-vencidas');
   const mb = document.getElementById('mn-badge-contas');
   if (mb && bv) { mb.textContent = bv.textContent; mb.style.display = bv.style.display; }
-}
-
-// Sincroniza goTo desktop → mobile nav
-const _goToOrig = goTo;
-function goTo(sec, btn) {
-  _goToOrig(sec, btn);
-  document.querySelectorAll('.mn-item').forEach(b => b.classList.remove('active'));
-  const mb = document.getElementById('mn-' + sec);
-  if (mb) mb.classList.add('active');
 }
 </script>
 </body>
