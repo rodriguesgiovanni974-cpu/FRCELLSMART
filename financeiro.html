@@ -6,6 +6,7 @@
 <title>FR Cell Smart — Financeiro</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 :root {
   --bg: #0d0f14;
@@ -885,8 +886,13 @@ const CATS = {
 };
 const COLORS = { entrada:'#22c55e', empresa:'#ef4444', pessoal:'#f59e0b' };
 
-let dados   = JSON.parse(localStorage.getItem('frcell_dados')  || '[]');
-let contas  = JSON.parse(localStorage.getItem('frcell_contas') || '[]');
+// ── SUPABASE ──────────────────────────────────────────────────────────────────
+const SUPABASE_URL = 'https://vimokqdbxoudstylxjwh.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_emQMKuxYdXlSaxFHaNY4BA_3X6Xx8bv';
+const _sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+let dados   = [];
+let contas  = [];
 let tipoAtual    = 'entrada';
 let contaSaida   = 'empresa';
 let periodoAtual = 30;
@@ -894,8 +900,28 @@ let filtroContas = 'todas';
 let charts = {};
 let secAtual = 'dashboard';
 
-function save()       { localStorage.setItem('frcell_dados',  JSON.stringify(dados)); }
-function saveContas() { localStorage.setItem('frcell_contas', JSON.stringify(contas)); }
+function dbToLanc(r) {
+  return { id: r.id, tipo: r.tipo, desc: r.descricao, valor: Number(r.valor),
+           data: r.data, cat: r.cat || '', obs: r.obs || '',
+           fromConta: r.from_conta, contaId: r.conta_id };
+}
+function dbToConta(r) {
+  return { id: r.id, desc: r.descricao, valor: Number(r.valor),
+           vencimento: r.vencimento, parcelas: r.parcelas,
+           parcelasPagas: r.parcelas_pagas, recorrente: r.recorrente,
+           cat: r.cat || '', obs: r.obs || '', saida: r.saida };
+}
+
+async function loadAll() {
+  const [{ data: d, error: e1 }, { data: c, error: e2 }] = await Promise.all([
+    _sb.from('lancamentos').select('*').order('created_at', { ascending: false }),
+    _sb.from('contas_pagar').select('*').order('created_at', { ascending: false })
+  ]);
+  if (e1 || e2) { console.error(e1 || e2); return; }
+  dados  = (d || []).map(dbToLanc);
+  contas = (c || []).map(dbToConta);
+  render();
+}
 
 const fmtMoeda = v => 'R$ ' + v.toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmtData  = iso => { const [y,m,d] = iso.split('-'); return `${d}/${m}/${y}`; };
@@ -965,21 +991,27 @@ function selectTipo(tipo, el) {
   document.getElementById('f-cat').innerHTML = CATS[tipo].map(c => `<option>${c}</option>`).join('');
 }
 
-function salvar() {
+async function salvar() {
   const desc  = document.getElementById('f-desc').value.trim();
   const valor = parseFloat(document.getElementById('f-valor').value);
   const data  = document.getElementById('f-data').value;
   const cat   = document.getElementById('f-cat').value;
   const obs   = document.getElementById('f-obs').value.trim();
   if (!desc || !valor || !data) { alert('Preencha descrição, valor e data.'); return; }
-  dados.push({ id: Date.now(), tipo: tipoAtual, desc, valor, data, cat, obs });
-  save(); closeModal(); render();
+  const { data: row, error } = await _sb.from('lancamentos').insert({
+    tipo: tipoAtual, descricao: desc, valor, data, cat, obs, from_conta: false, conta_id: null
+  }).select().single();
+  if (error) { alert('Erro ao salvar: ' + error.message); return; }
+  dados.unshift(dbToLanc(row));
+  closeModal(); render();
 }
 
-function deletar(id) {
+async function deletar(id) {
   if (!confirm('Remover este lançamento?')) return;
+  const { error } = await _sb.from('lancamentos').delete().eq('id', id);
+  if (error) { alert('Erro: ' + error.message); return; }
   dados = dados.filter(d => d.id !== id);
-  save(); render();
+  render();
 }
 
 // ── MODAL CONTA A PAGAR ───────────────────────────────────────────────────────
@@ -1014,7 +1046,7 @@ function toggleRecorrente() {
   else { pEl.disabled = false; }
 }
 
-function salvarConta() {
+async function salvarConta() {
   const desc       = document.getElementById('c-desc').value.trim();
   const valor      = parseFloat(document.getElementById('c-valor').value);
   const vencimento = document.getElementById('c-venc').value;
@@ -1023,49 +1055,56 @@ function salvarConta() {
   const cat        = document.getElementById('c-cat').value;
   const obs        = document.getElementById('c-obs').value.trim();
   if (!desc || !valor || !vencimento) { alert('Preencha descrição, valor e vencimento.'); return; }
-  contas.push({ id: Date.now(), desc, valor, vencimento, parcelas, parcelasPagas: 0, recorrente, cat, obs, saida: contaSaida });
-  saveContas(); closeConta(); render();
+  const { data: row, error } = await _sb.from('contas_pagar').insert({
+    descricao: desc, valor, vencimento, parcelas, parcelas_pagas: 0,
+    recorrente, cat, obs, saida: contaSaida
+  }).select().single();
+  if (error) { alert('Erro ao salvar: ' + error.message); return; }
+  contas.unshift(dbToConta(row));
+  closeConta(); render();
 }
 
-function pagarParcela(id) {
+async function pagarParcela(id) {
   const c = contas.find(x => x.id === id);
   if (!c) return;
   if (!c.recorrente && c.parcelasPagas >= c.parcelas) return;
-  c.parcelasPagas++;
-  // Lança automaticamente como saída
-  const parcLabel = c.recorrente ? c.parcelasPagas : `${c.parcelasPagas}/${c.parcelas}`;
-  const descLabel = c.parcelas === 1 && !c.recorrente ? c.desc : `${c.desc} (${parcLabel})`;
-  dados.push({
-    id: Date.now(),
-    tipo: c.saida || 'empresa',
-    desc: descLabel,
-    valor: c.valor,
-    data: new Date().toISOString().split('T')[0],
-    cat: c.cat,
-    obs: 'Lançado via Contas a Pagar',
-    fromConta: true,
-    contaId: c.id
-  });
-  save(); saveContas(); render();
+  const novasPagas = c.parcelasPagas + 1;
+  const parcLabel  = c.recorrente ? novasPagas : `${novasPagas}/${c.parcelas}`;
+  const descLabel  = c.parcelas === 1 && !c.recorrente ? c.desc : `${c.desc} (${parcLabel})`;
+  const [{ error: e1 }, { data: row, error: e2 }] = await Promise.all([
+    _sb.from('contas_pagar').update({ parcelas_pagas: novasPagas }).eq('id', id),
+    _sb.from('lancamentos').insert({
+      tipo: c.saida || 'empresa', descricao: descLabel, valor: c.valor,
+      data: new Date().toISOString().split('T')[0], cat: c.cat,
+      obs: 'Lançado via Contas a Pagar', from_conta: true, conta_id: id
+    }).select().single()
+  ]);
+  if (e1 || e2) { alert('Erro: ' + (e1 || e2).message); return; }
+  c.parcelasPagas = novasPagas;
+  dados.unshift(dbToLanc(row));
+  render();
 }
 
-function desfazerPagamento(id) {
+async function desfazerPagamento(id) {
   const c = contas.find(x => x.id === id);
   if (!c || c.parcelasPagas <= 0) return;
   if (!confirm('Desfazer o último pagamento desta conta?')) return;
-  // Remove o lançamento mais recente gerado por esta conta
-  const idx = dados.map((d,i) => ({d,i}))
-    .filter(({d}) => d.fromConta && d.contaId === id)
-    .sort((a,b) => b.d.id - a.d.id)[0];
-  if (idx) dados.splice(idx.i, 1);
-  c.parcelasPagas--;
-  save(); saveContas(); render();
+  const matching = dados.filter(d => d.fromConta && d.contaId === id).sort((a,b) => b.id - a.id);
+  const novasPagas = c.parcelasPagas - 1;
+  const ops = [_sb.from('contas_pagar').update({ parcelas_pagas: novasPagas }).eq('id', id)];
+  if (matching[0]) ops.push(_sb.from('lancamentos').delete().eq('id', matching[0].id));
+  await Promise.all(ops);
+  c.parcelasPagas = novasPagas;
+  if (matching[0]) dados = dados.filter(d => d.id !== matching[0].id);
+  render();
 }
 
-function deletarConta(id) {
+async function deletarConta(id) {
   if (!confirm('Remover esta conta?')) return;
+  const { error } = await _sb.from('contas_pagar').delete().eq('id', id);
+  if (error) { alert('Erro: ' + error.message); return; }
   contas = contas.filter(c => c.id !== id);
-  saveContas(); render();
+  render();
 }
 
 function filtrarContas(f, el) {
@@ -1557,10 +1596,10 @@ function abrirDiaCal(ds) {
 }
 
 // ── INIT ──────────────────────────────────────────────────────────────────────
-function init() {
+async function init() {
   document.getElementById('sb-date').textContent = new Date().toLocaleDateString('pt-BR',{weekday:'long',day:'numeric',month:'long'});
   document.getElementById('f-data').value = new Date().toISOString().split('T')[0];
-  render();
+  await loadAll();
 }
 init();
 </script>
