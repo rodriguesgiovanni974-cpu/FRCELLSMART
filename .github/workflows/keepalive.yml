@@ -1,0 +1,23 @@
+name: Supabase Keep-Alive
+
+on:
+  schedule:
+    - cron: '0 11 */3 * *'  # every 3 days at 11am UTC
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://vimokqdbxoudstylxjwh.supabase.co/rest/v1/" \
+            -H "apikey: sb_publishable_emQMKuxYdXlSaxFHaNY4BA_3X6Xx8bv" \
+            -H "Authorization: Bearer sb_publishable_emQMKuxYdXlSaxFHaNY4BA_3X6Xx8bv")
+          echo "Status: $STATUS"
+          if [ "$STATUS" != "200" ] && [ "$STATUS" != "206" ]; then
+            echo "Aviso: resposta inesperada $STATUS"
+            exit 1
+          fi
+          echo "Supabase FR Cell Smart ativo e respondendo."
